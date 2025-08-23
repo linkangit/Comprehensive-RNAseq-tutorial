@@ -42,38 +42,45 @@ This analysis pipeline performs comprehensive differential expression analysis c
 
 ## Input Data Requirements
 
-The pipeline expects three input files in your working directory:
+Based on the RNA-seq analysis script, here are the **exact inputs** that need to be in your working folder:
 
-### 1. Read Count Matrix (`read_counts_table.csv`)
-A CSV file containing raw read counts with:
-- **First column**: `gname` - Gene identifiers (e.g., AT1G01010)
-- **Subsequent columns**: Sample names matching those in sample information
-- **Values**: Integer read counts
+## Required Input Files
 
+### 1. `read_counts_table.csv` (REQUIRED)
+**Format:** CSV file with raw read counts
+- **First column:** Must be named `gname` containing gene identifiers
+- **Subsequent columns:** Sample names (must match the sample names in the script configuration)
+- **Data:** Integer read counts
+
+**Example structure:**
 ```csv
 gname,Kelley_17,Kelley_18,Kelley_19,Kelley_20,Kelley_21,Kelley_22,Kelley_23,Kelley_24
 AT1G01010,523,445,678,512,1205,1456,1123,1087
 AT1G01020,89,92,76,85,45,38,52,61
 AT1G01030,1234,1456,1123,1345,234,198,267,312
+AT1G01040,45,67,23,89,156,234,189,201
 ...
 ```
 
-### 2. Gene Annotation File (`Arabidopsis_gene_annotation.tsv`) [Optional]
-A TSV file containing gene annotations with:
-- **Nomenclature ID**: Gene identifiers matching those in count matrix
-- **Symbol**: Gene symbols or names
-- **Other columns**: Additional annotation information
+### 2. `Arabidopsis_gene_annotation.tsv` (OPTIONAL)
+**Format:** Tab-separated file with gene annotations
+- **Required column:** `Nomenclature ID` (must match gene IDs in the count matrix)
+- **Required column:** `Symbol` (gene symbols/names)
+- **Additional columns:** Any other annotation information
 
+**Example structure:**
 ```tsv
-Nomenclature ID	Symbol	Description	...
-AT1G01010	NAC001	NAC domain containing protein 1	...
-AT1G01020	ARV1	ARV1 family protein	...
-AT1G01030	NGA3	NGATHA3	...
+Nomenclature ID	Symbol	Description	Gene_type
+AT1G01010	NAC001	NAC domain containing protein 1	protein_coding
+AT1G01020	ARV1	ARV1 family protein	protein_coding
+AT1G01030	NGA3	NGATHA3	protein_coding
+AT1G01040	ASU1	ABSCISIC ACID INSENSITIVE4	protein_coding
 ...
 ```
 
-### 3. Sample Information (Defined in Script)
-The sample information is currently defined within the script in the `Config` class:
+## Sample Information (Defined in Script)
+
+The sample information is **hardcoded in the script** in the `Config` class. You need to **modify this section** to match your actual samples:
 
 ```python
 SAMPLE_INFO = {
@@ -83,6 +90,72 @@ SAMPLE_INFO = {
                   "mut", "mut", "mut", "mut"]
 }
 ```
+
+**Important Notes:**
+- Sample names in `SAMPLE_INFO["Sample"]` must **exactly match** the column headers in `read_counts_table.csv`
+- Use `"C"` for control samples and `"mut"` for mutant/treatment samples
+- You can have different numbers of replicates, but you need at least 2 samples per condition
+
+## Folder Structure
+
+Your working directory should look like this:
+
+```
+your_project_folder/
+├── code.py        # The analysis script
+├── read_counts_table.csv          # REQUIRED: Your count matrix
+├── Arabidopsis_gene_annotation.tsv # OPTIONAL: Gene annotations
+└── results/                       # Will be created automatically
+```
+
+## What You Need to Customize
+
+### 1. Update Sample Information
+Edit the `Config` class in the script to match your samples:
+
+```python
+class Config:
+    # ... other parameters ...
+    
+    # UPDATE THIS SECTION FOR YOUR DATA
+    SAMPLE_INFO = {
+        "Sample": ["Your_Sample_1", "Your_Sample_2", "Your_Sample_3", 
+                   "Your_Sample_4", "Your_Sample_5", "Your_Sample_6"],
+        "Condition": ["control", "control", "control", 
+                      "treatment", "treatment", "treatment"]
+    }
+```
+
+### 2. Update File Paths (if different)
+If your files have different names, update these in the `Config` class:
+
+```python
+class Config:
+    # File paths - UPDATE IF YOUR FILES HAVE DIFFERENT NAMES
+    READ_COUNTS_FILE = 'your_counts_file.csv'
+    GENE_ANNOTATION_FILE = 'your_annotation_file.tsv'
+    OUTPUT_DIR = 'results'
+```
+
+## Quick Checklist Before Running
+
+✅ **File naming:**
+- [ ] Count matrix file is named `read_counts_table.csv` (or update script)
+- [ ] Annotation file is named `Arabidopsis_gene_annotation.tsv` (or update script)
+
+✅ **File format:**
+- [ ] Count matrix has `gname` as first column name
+- [ ] Count matrix has sample names matching your `SAMPLE_INFO`
+- [ ] Annotation file has `Nomenclature ID` and `Symbol` columns (if using)
+
+✅ **Sample information:**
+- [ ] Updated `SAMPLE_INFO` in the script to match your samples
+- [ ] Sample names match exactly between count matrix and script
+- [ ] At least 2 samples per condition group
+
+✅ **File location:**
+- [ ] All files are in the same directory as the script
+- [ ] No extra spaces or special characters in file names
 
 ## Installation
 
@@ -344,7 +417,7 @@ After successful completion, the `results/` directory will contain:
 ### Key Columns in Results Files
 
 | Column | Description |
-|--------|-------------|
+|--|-|
 | `baseMean` | Mean normalized expression across all samples |
 | `log2FoldChange` | Log2 fold-change (mutant vs. control) |
 | `lfcSE` | Standard error of log2 fold-change |
@@ -501,7 +574,7 @@ ls results/  # View generated outputs
 
 The analysis typically takes 2-10 minutes depending on dataset size and computer specifications.
 
----
+
 
 ## Citation
 
@@ -510,6 +583,6 @@ If you use this pipeline in your research, please cite the underlying methods:
 - **DESeq2**: Love, M.I., Huber, W., Anders, S. (2014). Moderated estimation of fold change and dispersion for RNA-seq data with DESeq2. Genome Biology, 15, 550.
 - **PyDESeq2**: Muzellec, B., Teyssier, M., Girard, E., et al. (2023). PyDESeq2: a Python package for bulk RNA-seq differential expression analysis. Bioinformatics, 39(12), 2068-2069.
 
----
+
 
 **Happy analyzing! 🧬📊**
