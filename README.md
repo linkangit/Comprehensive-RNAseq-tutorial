@@ -344,7 +344,7 @@ After successful completion, the `results/` directory will contain:
 ### Key Columns in Results Files
 
 | Column | Description |
-|--|-|
+|--------|-------------|
 | `baseMean` | Mean normalized expression across all samples |
 | `log2FoldChange` | Log2 fold-change (mutant vs. control) |
 | `lfcSE` | Standard error of log2 fold-change |
@@ -493,7 +493,7 @@ To execute the complete pipeline:
 ls  # Should show: read_counts_table.csv, Arabidopsis_gene_annotation.tsv
 
 # Run the analysis
-python rna_analysis_improved.py
+python code.py
 
 # Check results
 ls results/  # View generated outputs
@@ -501,7 +501,7 @@ ls results/  # View generated outputs
 
 The analysis typically takes 2-10 minutes depending on dataset size and computer specifications.
 
-
+---
 
 ## Citation
 
@@ -510,6 +510,6 @@ If you use this pipeline in your research, please cite the underlying methods:
 - **DESeq2**: Love, M.I., Huber, W., Anders, S. (2014). Moderated estimation of fold change and dispersion for RNA-seq data with DESeq2. Genome Biology, 15, 550.
 - **PyDESeq2**: Muzellec, B., Teyssier, M., Girard, E., et al. (2023). PyDESeq2: a Python package for bulk RNA-seq differential expression analysis. Bioinformatics, 39(12), 2068-2069.
 
-
+---
 
 **Happy analyzing! 🧬📊**
