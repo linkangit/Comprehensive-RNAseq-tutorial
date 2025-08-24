@@ -1,4 +1,4 @@
-# RNA-seq Differential Expression Analysis Tutorial
+# Detailed RNA-seq Differential Expression Analysis Tutorial
 
 This tutorial walks through a complete RNA-seq differential expression analysis using Python with PyDESeq2, Scanpy, and visualization libraries. The pipeline is designed for research workflows with a focus on simplicity and effectiveness.
 
