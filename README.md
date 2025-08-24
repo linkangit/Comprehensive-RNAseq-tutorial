@@ -1,10 +1,6 @@
 # 🧬 From Raw Counts to Biological Insights: A Complete RNA-seq Analysis Journey
 
-*Discover the story your genes are telling through elegant differential expression analysis*
-
-
-
-Welcome to the world of RNA-seq analysis! This tutorial will guide you through a complete journey from raw sequencing counts to beautiful visualizations and meaningful biological insights. We'll use Python to unlock the secrets hidden in your transcriptomic data, transforming numbers into knowledge.
+This tutorial will guide you through a complete journey from raw sequencing counts to beautiful visualizations and meaningful biological insights. We'll use Python to unlock the secrets hidden in your transcriptomic data, transforming numbers into knowledge.
 
 ## 🎯 What You'll Discover
 
