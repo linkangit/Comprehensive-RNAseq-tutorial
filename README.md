@@ -2,6 +2,8 @@
 
 This tutorial will guide you through a complete journey from raw sequencing counts to beautiful visualizations and meaningful biological insights. We'll use Python to unlock the secrets hidden in your transcriptomic data, transforming numbers into knowledge.
 
+![](ma_plot.png)
+
 ## 🎯 What You'll Discover
 
 By the end of this analysis, you'll have:
