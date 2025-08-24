@@ -2,7 +2,7 @@
 
 *Discover the story your genes are telling through elegant differential expression analysis*
 
----
+
 
 Welcome to the world of RNA-seq analysis! This tutorial will guide you through a complete journey from raw sequencing counts to beautiful visualizations and meaningful biological insights. We'll use Python to unlock the secrets hidden in your transcriptomic data, transforming numbers into knowledge.
 
@@ -92,7 +92,7 @@ your_RNA_analysis/
 └── (beautiful results will appear here!)
 ```
 
----
+
 
 ## 🧭 The Analysis Journey: Step by Step
 
@@ -298,7 +298,7 @@ top_down10 = significant_hits.sort_values("log2FoldChange", ascending=True).head
 
 *The clustering algorithm acts like a detective, grouping genes with similar expression patterns - often revealing functional relationships you didn't know existed!*
 
----
+
 
 ## 🎨 Understanding Your Results
 
@@ -318,7 +318,7 @@ After running the analysis, you'll have a gallery of insights:
 **Your Results Table Contains:**
 
 | Column | What It Tells You | How to Read It |
-|--------|------------------|----------------|
+|--||-|
 | `baseMean` | How highly expressed this gene is overall | Higher = more abundant transcript |
 | `log2FoldChange` | How much the gene changed | +2 = 4x higher in mutant, -1 = 2x lower in mutant |
 | `padj` | How confident we are the change is real | <0.05 = very confident, <0.1 = confident |
@@ -328,7 +328,7 @@ After running the analysis, you'll have a gallery of insights:
 - **Statistically significant**: `padj < 0.1` (less than 10% chance this is random)
 - **Biologically meaningful**: `|log2FoldChange| > 0.5` (at least 1.4-fold change)
 
----
+
 
 ## 🔧 Customizing for Your Experiment
 
@@ -366,7 +366,7 @@ significant_hits = results_df[(results_df.padj < 0.05) & (abs(results_df.log2Fol
 significant_hits = results_df[(results_df.padj < 0.2) & (abs(results_df.log2FoldChange) > 0.25)]
 ```
 
----
+
 
 ## 🚀 Running Your Analysis
 
@@ -380,7 +380,7 @@ python code.py
 
 **Timeline:** Most analyses complete in 2-5 minutes, depending on how many genes you're analyzing.
 
----
+
 
 ## 🎭 Interpreting Your Scientific Story
 
@@ -423,7 +423,7 @@ python code.py
 - Consider more stringent thresholds
 - This could indicate global cellular stress rather than specific responses
 
----
+
 
 ## 🛠️ Advanced Customization
 
@@ -452,7 +452,7 @@ my_dds = DeseqDataSet(
 )
 ```
 
----
+
 
 ## 🆘 When Things Go Wrong
 
@@ -478,7 +478,7 @@ read_df = read_df[read_df.sum(axis=1) >= 50]  # Higher threshold
 - If points seem randomly colored, that's actually normal! The weighted random sampling creates visually appealing distributions
 - The key is looking at the labeled genes - those are your most significant hits
 
----
+
 
 ## 🎉 Celebrating Your Results
 
@@ -495,7 +495,7 @@ Once your analysis completes, you'll have:
 - **Experimental validation**: Design qPCR experiments to confirm key findings
 - **Biological interpretation**: Connect your gene expression changes to your research hypothesis
 
----
+
 
 ## 🙏 Acknowledgments
 
@@ -504,7 +504,7 @@ This analysis approach builds on the foundational work of:
 - **DESeq2**: Love, M.I., Huber, W., Anders, S. (2014). Moderated estimation of fold change and dispersion for RNA-seq data with DESeq2. *Genome Biology*, 15, 550.
 - **PyDESeq2**: Muzellec, B., Teyssier, M., Girard, E., et al. (2023). PyDESeq2: a Python package for bulk RNA-seq differential expression analysis. *Bioinformatics*, 39(12), 2068-2069.
 
----
+
 
 ## 🚀 Ready to Discover?
 
