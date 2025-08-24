@@ -1,4 +1,4 @@
-# Detailed RNA-seq Differential Expression Analysis Tutorial
+# RNA-seq Analysis Tutorial
 
 This tutorial walks through a complete RNA-seq differential expression analysis using Python with PyDESeq2, Scanpy, and visualization libraries. The pipeline is designed for research workflows with a focus on simplicity and effectiveness.
 
@@ -144,6 +144,45 @@ sample_info["Condition"] = sample_info["Condition"].cat.reorder_categories(["C",
 - Prepares sample metadata for DESeq2 by setting proper index
 - Converts conditions to categorical data with proper ordering (control first, then mutant)
 
+### Section 3.5: Quality Control Visualization
+
+```python
+# Calculate QC metrics
+qc_metrics = pd.DataFrame({
+    'Total_Reads': read_df.sum(axis=0),
+    'Detected_Genes': (read_df > 0).sum(axis=0),
+    'Condition': sample_info['Condition']
+})
+
+# Create QC plots
+fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+
+# Total reads per sample
+sns.barplot(data=qc_metrics.reset_index(), x='index', y='Total_Reads', 
+            hue='Condition', ax=axes[0])
+axes[0].set_title('Total Reads per Sample')
+axes[0].tick_params(axis='x', rotation=45)
+
+# Detected genes per sample
+sns.barplot(data=qc_metrics.reset_index(), x='index', y='Detected_Genes', 
+            hue='Condition', ax=axes[1])
+axes[1].set_title('Detected Genes per Sample')
+axes[1].tick_params(axis='x', rotation=45)
+
+plt.tight_layout()
+plt.savefig("qc_metrics.png", dpi=300, bbox_inches="tight", facecolor="white")
+plt.show()
+```
+
+**What happens here:**
+- Calculates total read counts per sample to check for library size differences
+- Counts detected genes (reads > 0) per sample to assess library complexity
+- Creates side-by-side bar plots comparing control vs. mutant samples
+- Helps identify potential outlier samples or batch effects early
+- Saves high-quality plot for inclusion in reports
+
+**Why this matters:** These QC metrics help you spot issues before running expensive statistical analysis. Samples with very different total reads or detected genes might indicate technical problems.
+
 ### Section 4: DESeq2 Analysis
 
 ```python
@@ -286,12 +325,14 @@ top_down10 = significant_hits.sort_values("log2FoldChange", ascending=True).head
 After running the script, you'll get:
 
 ### Generated Files
+- **`qc_metrics.png`** - Quality control plots showing read counts and detected genes per sample
 - **`volcano.png`** - Volcano plot showing statistical vs. biological significance
 - **`heatmap_all_sig_genes.png`** - Clustered heatmap of all significant genes
 - **`heatmap_top20_up_down.png`** - Heatmap of most highly regulated genes
 - **`DE_results.csv`** - Complete differential expression results
 
 ### Interactive Plots (Displayed During Execution)
+- **QC metrics** - Bar plots comparing read counts and gene detection between conditions
 - **PCA plot** - Sample clustering and outlier detection
 - **Correlation heatmap** - Sample-to-sample relationships
 - **MA plot** - Expression level vs. fold-change relationship
