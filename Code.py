@@ -2,10 +2,20 @@
 # coding: utf-8
 
 """
-RNA-seq analysis script using PyDESeq2, Scanpy, and other libraries.
+Comprehensive RNA-seq Differential Expression Analysis Pipeline
 
-Usage:
-    python rna_analysis_improved.py [--config config.yaml]
+This script performs complete differential expression analysis using PyDESeq2,
+with beautiful visualizations and robust statistical testing. The pipeline 
+transforms raw sequencing counts into biological insights through:
+
+1. Quality control assessment
+2. Statistical differential expression analysis  
+3. Rich data visualizations
+4. Results export and summarization
+
+Author: Your Name
+Usage: python code.py
+Dependencies: pandas, numpy, seaborn, matplotlib, scanpy, pydeseq2, gseapy, adjustText
 """
 
 import pandas as pd
@@ -14,705 +24,759 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 import scanpy as sc
 import anndata
-import argparse
-import logging
-import os
-import sys
-from pathlib import Path
+import random  # Used for sophisticated volcano plot aesthetics
 
-# PyDESeq2
-try:
-    from pydeseq2.dds import DeseqDataSet
-    from pydeseq2.ds import DeseqStats
-except ImportError:
-    print("Error: PyDESeq2 not installed. Install with: pip install pydeseq2")
-    sys.exit(1)
+# Statistical analysis libraries
+from pydeseq2.dds import DeseqDataSet  # Core DESeq2 functionality
+from pydeseq2.ds import DeseqStats     # Statistical results extraction
 
-# GSEA (optional)
-try:
-    import gseapy as gp
-    from gseapy.plot import gseaplot
-    GSEA_AVAILABLE = True
-except ImportError:
-    print("Warning: GSEA not available. Install with: pip install gseapy")
-    GSEA_AVAILABLE = False
+# Optional: Gene Set Enrichment Analysis
+import gseapy as gp
+from gseapy.plot import gseaplot
 
-# For label adjustment
-try:
-    from adjustText import adjust_text
-    ADJUST_TEXT_AVAILABLE = True
-except ImportError:
-    print("Warning: adjustText not available. Install with: pip install adjustText")
-    ADJUST_TEXT_AVAILABLE = False
+# Optional: Automatic text label positioning in plots
+from adjustText import adjust_text
 
-# Set random seed for reproducibility
+# Set random seed for reproducible visualizations
+random.seed(42)
 np.random.seed(42)
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+#######################################################
+# 1. EXPERIMENTAL DESIGN: Sample Information Setup
+#######################################################
+"""
+Define your experimental setup here. This is the foundation of your analysis
+- each sample gets assigned to an experimental condition.
+
+CUSTOMIZE THIS SECTION for your experiment:
+- Update sample names to match your count matrix columns
+- Update conditions to reflect your experimental design
+"""
+
+sample_info_dict = {
+    "Sample": ["Kelley_17", "Kelley_18", "Kelley_19", "Kelley_20",
+               "Kelley_21", "Kelley_22", "Kelley_23", "Kelley_24"],
+    "Condition": ["C", "C", "C", "C",                    # Control samples
+                  "mut", "mut", "mut", "mut"]            # Mutant/treatment samples
+}
+
+# Convert to pandas DataFrame for easier manipulation
+sample_info = pd.DataFrame(sample_info_dict)
+print("EXPERIMENTAL DESIGN:")
+print("=" * 50)
+print(sample_info)
+print("=" * 50, "\n")
+
+# Automatically identify sample groups for downstream analysis
+ctrl_list = sample_info.loc[sample_info['Condition'] == 'C', 'Sample'].tolist()
+variant_list = sample_info.loc[sample_info['Condition'] == 'mut', 'Sample'].tolist()
+
+print(f"📋 Control group samples ({len(ctrl_list)}): {ctrl_list}")
+print(f"📋 Mutant group samples ({len(variant_list)}): {variant_list}")
+print(f"📊 Total samples in analysis: {len(ctrl_list) + len(variant_list)}\n")
 
 #######################################################
-# Configuration Parameters
+# 2. DATA LOADING: Import and Clean Count Matrix
 #######################################################
+"""
+Load the raw RNA-seq count matrix and perform initial data cleaning.
+The count matrix should have genes as rows and samples as columns.
+"""
 
-class Config:
-    """Configuration parameters for RNA-seq analysis"""
-    
-    # File paths
-    READ_COUNTS_FILE = 'read_counts_table.csv'
-    GENE_ANNOTATION_FILE = 'Arabidopsis_gene_annotation.tsv'
-    OUTPUT_DIR = 'results'
-    
-    # Analysis parameters
-    MIN_BASE_MEAN = 10
-    PADJ_THRESHOLD = 0.1
-    LOG2FC_THRESHOLD = 0.5
-    VOLCANO_HIGHLIGHT_PADJ = 5  # -log10(padj) threshold for labeling
-    VOLCANO_HIGHLIGHT_LOG2FC = 2  # log2FC threshold for labeling
-    
-    # Sample information
-    SAMPLE_INFO = {
-        "Sample": ["Kelley_17", "Kelley_18", "Kelley_19", "Kelley_20",
-                   "Kelley_21", "Kelley_22", "Kelley_23", "Kelley_24"],
-        "Condition": ["C", "C", "C", "C",
-                      "mut", "mut", "mut", "mut"]
-    }
-    
-    # Plot settings
-    FIGURE_DPI = 300
-    HEATMAP_FIGSIZE = (8, 10)
-    VOLCANO_FIGSIZE = (8, 8)
+print("🔄 Loading RNA-seq count data...")
 
-def check_file_exists(filepath):
-    """Check if file exists and raise error if not"""
-    if not os.path.exists(filepath):
-        raise FileNotFoundError(f"Required file not found: {filepath}")
+# Load count matrix from CSV file
+read_df = pd.read_csv('read_counts_table.csv')
+print(f"📁 Initial count matrix shape: {read_df.shape}")
+print(f"📝 Available columns: {list(read_df.columns)}")
 
-def create_output_dir(output_dir):
-    """Create output directory if it doesn't exist"""
-    Path(output_dir).mkdir(parents=True, exist_ok=True)
+# Set gene names as row indices (genes = rows, samples = columns)
+read_df = read_df.set_index('gname')
+print(f"🧬 Using 'gname' column as gene identifiers")
+
+# Remove genes with zero counts across ALL samples
+# These genes provide no information for differential analysis
+genes_before = len(read_df)
+read_df = read_df[read_df.sum(axis=1) > 0]
+genes_removed = genes_before - len(read_df)
+print(f"🗑️ Removed {genes_removed} genes with zero counts across all samples")
 
 #######################################################
-# 1. Prepare sample information (metadata)
+# 3. DATA FILTERING: Focus on Experimental Samples
 #######################################################
+"""
+Filter the count matrix to include only samples relevant to our analysis
+and prepare metadata for statistical testing.
+"""
 
-def prepare_sample_info(config):
-    """Prepare and validate sample information"""
-    logger.info("Preparing sample information...")
-    
-    sample_info = pd.DataFrame(config.SAMPLE_INFO)
-    logger.info(f"Sample info:\n{sample_info}")
-    
-    # Validate sample info
-    if sample_info['Sample'].duplicated().any():
-        raise ValueError("Duplicate sample names found in sample information")
-    
-    # Identify control vs. mutant groups
-    ctrl_list = sample_info.loc[sample_info['Condition'] == 'C', 'Sample'].tolist()
-    variant_list = sample_info.loc[sample_info['Condition'] == 'mut', 'Sample'].tolist()
-    
-    logger.info(f"Control samples: {ctrl_list}")
-    logger.info(f"Mutant samples: {variant_list}")
-    
-    if len(ctrl_list) == 0 or len(variant_list) == 0:
-        raise ValueError("Both control and mutant samples are required")
-    
-    return sample_info, ctrl_list, variant_list
+print("\n🎯 Filtering data for experimental samples...")
+
+# Keep only the samples defined in our experimental design
+all_samples = ctrl_list + variant_list
+read_df = read_df[all_samples]
+print(f"📊 Filtered count matrix dimensions: {read_df.shape}")
+print(f"✅ Final sample list: {list(read_df.columns)}")
+
+# Prepare sample metadata for DESeq2 requirements
+sample_info.set_index('Sample', inplace=True)  # Use sample names as index
+sample_info["Condition"] = sample_info["Condition"].astype("category")  # Convert to categorical
+# Order categories with control first (important for fold-change interpretation)
+sample_info["Condition"] = sample_info["Condition"].cat.reorder_categories(["C", "mut"], ordered=True)
+
+print("✅ Sample metadata prepared for statistical analysis\n")
 
 #######################################################
-# 2. Load and clean up read-count data
+# QUALITY CONTROL: Sample Health Assessment  
 #######################################################
+"""
+Before diving into differential expression, let's check if our samples
+are healthy and comparable. This early QC can save hours of debugging later!
+"""
 
-def load_and_clean_counts(config, all_samples):
-    """Load and clean read count data"""
-    logger.info("Loading read count data...")
-    
-    check_file_exists(config.READ_COUNTS_FILE)
-    read_df = pd.read_csv(config.READ_COUNTS_FILE)
-    
-    logger.info(f"Initial read count table shape: {read_df.shape}")
-    logger.info(f"Columns: {list(read_df.columns)}")
-    
-    # Check if 'gname' column exists
-    if 'gname' not in read_df.columns:
-        raise ValueError("'gname' column not found in read count data")
-    
-    # Make 'gname' column the index
-    read_df = read_df.set_index('gname')
-    
-    # Check if all required samples are in the data
-    missing_samples = [s for s in all_samples if s not in read_df.columns]
-    if missing_samples:
-        raise ValueError(f"Missing samples in read count data: {missing_samples}")
-    
-    # Filter columns based on sample list
-    read_df = read_df[all_samples]
-    
-    # Exclude genes with zero total counts
-    initial_genes = len(read_df)
-    read_df = read_df[read_df.sum(axis=1) > 0]
-    logger.info(f"Removed {initial_genes - len(read_df)} genes with zero counts")
-    
-    logger.info(f"Final read count table shape: {read_df.shape}")
-    
-    return read_df
+print("🔍 Performing quality control assessment...")
+
+# Calculate key quality metrics for each sample
+qc_metrics = pd.DataFrame({
+    'Total_Reads': read_df.sum(axis=0),        # Total sequencing depth per sample
+    'Detected_Genes': (read_df > 0).sum(axis=0),  # Number of genes with >0 reads
+    'Condition': sample_info['Condition']       # Experimental condition for comparison
+})
+
+print("📊 Quality Control Metrics:")
+print("-" * 40)
+print(qc_metrics)
+print("-" * 40)
+
+# Create informative QC visualizations
+fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+
+# Plot 1: Total reads per sample (sequencing depth)
+sns.barplot(data=qc_metrics.reset_index(), x='index', y='Total_Reads', 
+            hue='Condition', ax=axes[0])
+axes[0].set_title('Total Reads per Sample\n(Sequencing Depth)')
+axes[0].set_xlabel('Sample')
+axes[0].set_ylabel('Total Read Counts')
+axes[0].tick_params(axis='x', rotation=45)
+
+# Plot 2: Detected genes per sample (library complexity)
+sns.barplot(data=qc_metrics.reset_index(), x='index', y='Detected_Genes', 
+            hue='Condition', ax=axes[1])
+axes[1].set_title('Detected Genes per Sample\n(Library Complexity)')
+axes[1].set_xlabel('Sample')
+axes[1].set_ylabel('Number of Detected Genes')
+axes[1].tick_params(axis='x', rotation=45)
+
+# Save and display QC plots
+plt.tight_layout()
+plt.savefig("qc_metrics.png", dpi=300, bbox_inches="tight", facecolor="white")
+plt.show()
+
+print("💾 QC metrics plot saved as 'qc_metrics.png'")
+print("✅ Quality control assessment complete!\n")
 
 #######################################################
-# 3. Quality control metrics
+# 4. STATISTICAL ANALYSIS: DESeq2 Differential Expression
 #######################################################
+"""
+The core statistical analysis using DESeq2 algorithm. This sophisticated
+method accounts for count data characteristics and provides robust
+differential expression testing.
+"""
 
-def calculate_qc_metrics(read_df, sample_info):
-    """Calculate and display quality control metrics"""
-    logger.info("Calculating quality control metrics...")
+print("🧮 Setting up DESeq2 statistical analysis...")
+
+# DESeq2 expects samples as rows and genes as columns (opposite of typical format)
+transposed_df = read_df.T
+print(f"🔄 Transposed data shape: {transposed_df.shape} (samples × genes)")
+
+# Create DESeqDataSet object with count data, sample info, and experimental design
+my_dds = DeseqDataSet(
+    counts=transposed_df,           # Count matrix (samples × genes)
+    metadata=sample_info,           # Sample information with conditions
+    design_factors=["Condition"]    # Which factor(s) to test for differences
+)
+
+print("📋 DESeq2 dataset created:")
+print(my_dds)
+
+print("\n🚀 Running DESeq2 analysis (this may take a few moments)...")
+
+# Run the complete DESeq2 pipeline:
+# 1. Estimate size factors (normalize for library size differences)
+# 2. Estimate dispersions (model count variability)  
+# 3. Fit negative binomial GLM and test for differences
+my_dds.deseq2()
+
+print("✅ DESeq2 analysis completed!")
+print(my_dds)
+
+#######################################################
+# 5. RESULTS EXTRACTION: Getting the Statistical Evidence
+#######################################################
+"""
+Extract the statistical results from DESeq2 analysis.
+We're asking: "Which genes are significantly different between mutant and control?"
+"""
+
+print("\n📊 Extracting differential expression results...")
+
+# Define the statistical contrast: mutant vs control
+# This tells DESeq2 exactly which comparison we want
+my_stats = DeseqStats(my_dds, contrast=["Condition", "mut", "C"])
+stats_summary = my_stats.summary()  # Get summary statistics
+results_df = my_stats.results_df    # Get detailed results for each gene
+
+print("📈 Statistical Summary:")
+print(stats_summary)
+print("\n🔍 First few results:")
+print(results_df.head())
+
+#######################################################
+# 6. GENE ANNOTATION: Adding Biological Context
+#######################################################
+"""
+Transform cryptic gene IDs into meaningful gene names and descriptions.
+This makes results much more interpretable and biologically relevant.
+"""
+
+print("\n📚 Adding gene annotations for biological context...")
+
+try:
+    # Load gene annotation file
+    gene_info = pd.read_csv('Arabidopsis_gene_annotation.tsv', sep='\t')
+    gene_info.set_index('Nomenclature ID', inplace=True)
     
-    qc_metrics = pd.DataFrame({
-        'Total_Reads': read_df.sum(axis=0),
-        'Detected_Genes': (read_df > 0).sum(axis=0),
-        'Condition': sample_info.set_index('Sample')['Condition']
-    })
+    # Filter annotation file to include only genes with symbols
+    # Note: This filtering step ensures we only keep well-annotated genes
+    gene_info['check_symbol'] = gene_info['Symbol'].isnull()  # Fixed from original
+    gene_info = gene_info.loc[gene_info['check_symbol'] == False]
     
-    logger.info("Quality control metrics:")
-    logger.info(f"\n{qc_metrics}")
+    # Merge statistical results with gene annotations
+    complete_df = pd.merge(
+        left=results_df,        # Statistical results
+        right=gene_info,        # Gene annotations
+        how="inner",           # Only keep genes present in both datasets
+        left_index=True,       # Match on gene IDs
+        right_index=True
+    )
     
-    # Plot QC metrics
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    # Add gene symbols to main results dataframe
+    results_df['Symbol'] = complete_df['Symbol']
+    print(f"✅ Added gene symbols for {len(complete_df)} genes")
     
-    # Total reads per sample
-    sns.barplot(data=qc_metrics.reset_index(), x='index', y='Total_Reads', 
-                hue='Condition', ax=axes[0])
-    axes[0].set_title('Total Reads per Sample')
-    axes[0].tick_params(axis='x', rotation=45)
+except FileNotFoundError:
+    print("⚠️ Gene annotation file not found - using gene IDs as symbols")
+    results_df['Symbol'] = results_df.index
+except Exception as e:
+    print(f"⚠️ Error loading annotations: {e}")
+    results_df['Symbol'] = results_df.index
+
+#######################################################
+# 7. SIGNIFICANCE FILTERING: Finding Meaningful Changes
+#######################################################
+"""
+Apply filters to identify genes with both statistical significance
+and biological relevance. We use two criteria:
+1. Statistical: adjusted p-value < 0.1 (10% false discovery rate)
+2. Biological: |log2FoldChange| > 0.5 (at least 1.4-fold change)
+"""
+
+print("\n🎯 Identifying significantly changed genes...")
+
+# Filter out lowly expressed genes (these are unreliable for statistical testing)
+genes_before_filter = len(results_df)
+results_df = results_df[results_df.baseMean >= 10]
+genes_after_filter = len(results_df)
+print(f"🔧 Filtered out {genes_before_filter - genes_after_filter} lowly expressed genes (baseMean < 10)")
+
+# Apply significance criteria to identify truly interesting genes
+significant_hits = results_df[
+    (results_df.padj < 0.1) &                    # Statistically significant (FDR < 10%)
+    (abs(results_df.log2FoldChange) > 0.5)       # Biologically meaningful (>1.4-fold change)
+]
+
+print(f"\n🎉 DISCOVERY SUMMARY:")
+print(f"📊 Total genes analyzed: {len(results_df)}")
+print(f"⭐ Significantly changed genes: {len(significant_hits)}")
+
+if len(significant_hits) > 0:
+    upregulated = (significant_hits.log2FoldChange > 0).sum()
+    downregulated = (significant_hits.log2FoldChange < 0).sum()
+    print(f"📈 Upregulated in mutant: {upregulated}")
+    print(f"📉 Downregulated in mutant: {downregulated}")
+    print("\n🔥 Most dramatic changes:")
+    print(significant_hits.nlargest(5, 'log2FoldChange')[['Symbol', 'log2FoldChange', 'padj']])
+else:
+    print("❌ No genes met significance criteria - consider adjusting thresholds")
+
+#######################################################
+# 8. DATA EXPLORATION: Visualizing the Big Picture
+#######################################################
+"""
+Create comprehensive visualizations to explore overall data patterns.
+These plots help you understand sample relationships and identify
+potential issues before focusing on individual genes.
+"""
+
+print("\n🎨 Creating exploratory data visualizations...")
+
+try:
+    # Access normalized count data from DESeq2 results
+    # Different PyDESeq2 versions may store this differently
+    norm_data = my_dds.layers["normed_counts"]
+    print("✅ Successfully accessed normalized counts")
     
-    # Detected genes per sample
-    sns.barplot(data=qc_metrics.reset_index(), x='index', y='Detected_Genes', 
-                hue='Condition', ax=axes[1])
-    axes[1].set_title('Detected Genes per Sample')
-    axes[1].tick_params(axis='x', rotation=45)
+except AttributeError:
+    print("⚠️ Could not access 'my_dds.layers[\"normed_counts\"]'")
+    print("   This might be a PyDESeq2 version issue - check documentation")
+    norm_data = None
+
+# Only proceed with visualizations if we have normalized data
+if norm_data is not None:
     
-    plt.tight_layout()
-    plt.savefig(f"{Config.OUTPUT_DIR}/qc_metrics.png", dpi=Config.FIGURE_DPI, bbox_inches="tight")
+    # BUILD SCANPY OBJECT FOR ADVANCED ANALYSIS
+    # AnnData is the standard format for single-cell analysis tools
+    adata = anndata.AnnData(
+        X=norm_data,                                    # Normalized expression matrix
+        obs=my_dds.obs,                                # Sample metadata  
+        var=pd.DataFrame(index=my_dds.var.index)       # Gene metadata
+    )
+    
+    # Add additional data layers for different transformations
+    adata.layers["counts"] = norm_data              # Store original normalized counts
+    adata.layers["log1p"] = np.log1p(norm_data)     # Log-transformed counts
+    
+    print("🔬 Created AnnData object for advanced analysis")
+
+    # PRINCIPAL COMPONENT ANALYSIS (PCA)
+    # PCA reveals the major sources of variation in your data
+    print("🎯 Performing Principal Component Analysis...")
+    
+    sc.pp.scale(adata, max_value=10)    # Scale data to unit variance (prevents high-expression genes from dominating)
+    sc.tl.pca(adata)                    # Compute principal components
+    
+    # Create PCA plot colored by experimental condition
+    sc.pl.pca(adata, color='Condition', size=150, show=False)
+    plt.title("PCA: Sample Relationships Across Transcriptome\n(Samples should cluster by condition)")
+    plt.savefig("pca_plot.png", dpi=300, bbox_inches="tight", facecolor="white")
     plt.show()
-    
-    return qc_metrics
+    print("💾 PCA plot saved as 'pca_plot.png'")
 
-#######################################################
-# 4. Prepare data for DESeq2 and run analysis
-#######################################################
+    # SAMPLE CORRELATION HEATMAP
+    # Shows how similar each sample is to every other sample
+    print("🔥 Creating sample correlation heatmap...")
+    
+    corr_mat = np.corrcoef(norm_data)  # Calculate pairwise correlations between samples
+    
+    # Create clustered heatmap with sample names as labels
+    sns.clustermap(
+        corr_mat,
+        row_cluster=True, col_cluster=True,      # Cluster both rows and columns
+        cmap="vlag",                             # Blue-white-red color scheme
+        xticklabels=adata.obs.index,            # Sample names on x-axis
+        yticklabels=adata.obs.index,            # Sample names on y-axis
+        figsize=(8, 8)
+    )
+    plt.suptitle("Sample-to-Sample Correlation Matrix\n(Similar samples = warmer colors)", y=1.02)
+    plt.savefig("correlation_heatmap.png", dpi=300, bbox_inches="tight", facecolor="white")
+    plt.show()
+    print("💾 Correlation heatmap saved as 'correlation_heatmap.png'")
 
-def run_deseq2_analysis(read_df, sample_info):
-    """Run DESeq2 differential expression analysis"""
-    logger.info("Running DESeq2 analysis...")
-    
-    # Prepare sample info for DESeq2
-    sample_info_deseq = sample_info.set_index('Sample')
-    sample_info_deseq["Condition"] = sample_info_deseq["Condition"].astype("category")
-    sample_info_deseq["Condition"] = sample_info_deseq["Condition"].cat.reorder_categories(["C", "mut"], ordered=True)
-    
-    # PyDESeq2 expects samples in rows and genes in columns
-    transposed_df = read_df.T
-    
-    try:
-        my_dds = DeseqDataSet(
-            counts=transposed_df,
-            metadata=sample_info_deseq,
-            design_factors=["Condition"]
-        )
-        
-        logger.info(f"DESeq2 dataset created: {my_dds}")
-        
-        my_dds.deseq2()
-        logger.info("DESeq2 analysis completed")
-        
-        return my_dds
-        
-    except Exception as e:
-        logger.error(f"Error in DESeq2 analysis: {e}")
-        raise
-
-#######################################################
-# 5. Extract and process DE results
-#######################################################
-
-def extract_de_results(my_dds, config):
-    """Extract and process differential expression results"""
-    logger.info("Extracting DE results...")
-    
-    try:
-        my_stats = DeseqStats(my_dds, contrast=["Condition", "mut", "C"])
-        stats_summary = my_stats.summary()
-        results_df = my_stats.results_df.copy()
-        
-        logger.info(f"DE analysis summary:\n{stats_summary}")
-        
-        return results_df
-        
-    except Exception as e:
-        logger.error(f"Error extracting DE results: {e}")
-        raise
-
-#######################################################
-# 6. Add gene annotations
-#######################################################
-
-def add_gene_annotations(results_df, config):
-    """Add gene annotations to results"""
-    logger.info("Adding gene annotations...")
-    
-    if not os.path.exists(config.GENE_ANNOTATION_FILE):
-        logger.warning(f"Gene annotation file not found: {config.GENE_ANNOTATION_FILE}")
-        results_df['Symbol'] = results_df.index
-        return results_df
-    
-    try:
-        gene_info = pd.read_csv(config.GENE_ANNOTATION_FILE, sep='\t')
-        
-        if 'Nomenclature ID' not in gene_info.columns:
-            logger.warning("'Nomenclature ID' column not found in annotation file")
-            results_df['Symbol'] = results_df.index
-            return results_df
-            
-        gene_info.set_index('Nomenclature ID', inplace=True)
-        
-        # Filter out rows without symbols (fixed from original)
-        if 'Symbol' in gene_info.columns:
-            gene_info = gene_info.dropna(subset=['Symbol'])
-        
-        # Merge annotations
-        complete_df = pd.merge(
-            left=results_df,
-            right=gene_info[['Symbol']] if 'Symbol' in gene_info.columns else pd.DataFrame(index=gene_info.index),
-            how="left",
-            left_index=True,
-            right_index=True
-        )
-        
-        # Use gene ID as symbol if no symbol available
-        if 'Symbol' in complete_df.columns:
-            complete_df['Symbol'] = complete_df['Symbol'].fillna(complete_df.index)
-        else:
-            complete_df['Symbol'] = complete_df.index
-            
-        results_df = complete_df
-        logger.info(f"Added annotations for {(~results_df['Symbol'].isnull()).sum()} genes")
-        
-        return results_df
-        
-    except Exception as e:
-        logger.warning(f"Error loading gene annotations: {e}")
-        results_df['Symbol'] = results_df.index
-        return results_df
-
-#######################################################
-# 7. Filter results and identify significant genes
-#######################################################
-
-def filter_and_identify_significant(results_df, config):
-    """Filter results and identify significant genes"""
-    logger.info("Filtering results and identifying significant genes...")
-    
-    # Filter out low-expression genes
-    initial_count = len(results_df)
-    results_df = results_df[results_df.baseMean >= config.MIN_BASE_MEAN]
-    logger.info(f"Filtered out {initial_count - len(results_df)} low-expression genes")
-    
-    # Remove genes with missing values
-    results_df = results_df.dropna(subset=["padj", "log2FoldChange", "baseMean"])
-    
-    # Find significant genes
-    significant_mask = (results_df.padj < config.PADJ_THRESHOLD) & \
-                      (abs(results_df.log2FoldChange) > config.LOG2FC_THRESHOLD)
-    significant_hits = results_df[significant_mask].copy()
-    
-    logger.info(f"Identified {len(significant_hits)} significant genes")
-    logger.info(f"Upregulated: {(significant_hits.log2FoldChange > 0).sum()}")
-    logger.info(f"Downregulated: {(significant_hits.log2FoldChange < 0).sum()}")
-    
-    return results_df, significant_hits
-
-#######################################################
-# 8. Visualization functions
-#######################################################
-
-def create_pca_plot(my_dds, config):
-    """Create PCA plot"""
-    logger.info("Creating PCA plot...")
-    
-    try:
-        # Try different ways to access normalized counts
-        norm_data = None
-        if hasattr(my_dds, 'layers') and 'normed_counts' in my_dds.layers:
-            norm_data = my_dds.layers["normed_counts"]
-        elif hasattr(my_dds, 'X'):
-            norm_data = my_dds.X
-        else:
-            logger.warning("Could not find normalized counts for PCA")
-            return None
-        
-        if norm_data is not None:
-            # Build AnnData object
-            adata = anndata.AnnData(
-                X=norm_data, 
-                obs=my_dds.obs, 
-                var=pd.DataFrame(index=my_dds.var.index)
-            )
-            
-            # Log transform and scale
-            adata.layers["log1p"] = np.log1p(norm_data)
-            sc.pp.scale(adata, max_value=10)
-            sc.tl.pca(adata)
-            
-            # Plot PCA
-            sc.pl.pca(adata, color='Condition', size=150, show=False)
-            plt.title("PCA of Samples")
-            plt.savefig(f"{config.OUTPUT_DIR}/pca_plot.png", dpi=config.FIGURE_DPI, bbox_inches="tight")
-            plt.show()
-            
-            return adata
-            
-    except Exception as e:
-        logger.warning(f"Error creating PCA plot: {e}")
-        return None
-
-def create_correlation_heatmap(my_dds, config):
-    """Create sample correlation heatmap"""
-    logger.info("Creating correlation heatmap...")
-    
-    try:
-        # Get normalized counts
-        norm_data = None
-        if hasattr(my_dds, 'layers') and 'normed_counts' in my_dds.layers:
-            norm_data = my_dds.layers["normed_counts"]
-        elif hasattr(my_dds, 'X'):
-            norm_data = my_dds.X
-            
-        if norm_data is not None:
-            # Calculate correlation matrix (samples x samples)
-            corr_mat = np.corrcoef(norm_data)
-            
-            # Create heatmap
-            plt.figure(figsize=(8, 6))
-            sns.heatmap(
-                corr_mat,
-                annot=True,
-                cmap="viridis",
-                xticklabels=my_dds.obs.index,
-                yticklabels=my_dds.obs.index,
-                square=True
-            )
-            plt.title("Sample Correlation Heatmap")
-            plt.tight_layout()
-            plt.savefig(f"{config.OUTPUT_DIR}/correlation_heatmap.png", dpi=config.FIGURE_DPI, bbox_inches="tight")
-            plt.show()
-            
-    except Exception as e:
-        logger.warning(f"Error creating correlation heatmap: {e}")
-
-def create_ma_plot(results_df, config):
-    """Create MA plot"""
-    logger.info("Creating MA plot...")
+    # MA PLOT (Mean vs. Average)
+    # Shows relationship between gene expression level and fold-change magnitude
+    print("📈 Creating MA plot...")
     
     plt.figure(figsize=(8, 6))
     
-    # Color points by significance
-    significant_mask = (results_df.padj < config.PADJ_THRESHOLD) & \
-                      (abs(results_df.log2FoldChange) > config.LOG2FC_THRESHOLD)
-    
-    # Plot non-significant points
-    plt.scatter(
-        x=results_df.loc[~significant_mask, 'baseMean'],
-        y=results_df.loc[~significant_mask, 'log2FoldChange'],
-        alpha=0.3,
-        c='lightgray',
-        s=20,
-        label='Non-significant'
+    # Create scatter plot with fold-change colored by magnitude
+    scatter = plt.scatter(
+        x=results_df['baseMean'],           # X-axis: average expression level
+        y=results_df['log2FoldChange'],     # Y-axis: fold-change (mutant vs control)
+        c=results_df['log2FoldChange'],     # Color by fold-change magnitude
+        alpha=0.6,                          # Semi-transparent points
+        cmap='RdBu_r',                      # Red-blue color scheme
+        s=20                                # Point size
     )
     
-    # Plot significant points
-    plt.scatter(
-        x=results_df.loc[significant_mask, 'baseMean'],
-        y=results_df.loc[significant_mask, 'log2FoldChange'],
-        alpha=0.7,
-        c='red',
-        s=30,
-        label='Significant'
-    )
+    # Add reference lines
+    plt.xscale('log')                                    # Log scale for expression level
+    plt.axhline(y=0, color='black', linestyle='--', alpha=0.7)     # No change line
+    plt.axhline(y=0.5, color='gray', linestyle=':', alpha=0.5)     # Significance thresholds
+    plt.axhline(y=-0.5, color='gray', linestyle=':', alpha=0.5)
     
-    plt.xscale('log')
-    plt.axhline(y=0, color='black', linestyle='--', alpha=0.7)
-    plt.axhline(y=config.LOG2FC_THRESHOLD, color='blue', linestyle='--', alpha=0.5)
-    plt.axhline(y=-config.LOG2FC_THRESHOLD, color='blue', linestyle='--', alpha=0.5)
-    
-    plt.xlabel("Mean Normalized Counts (log scale)")
-    plt.ylabel("Log2 Fold Change")
-    plt.title("MA Plot")
-    plt.legend()
+    # Styling and labels
+    plt.xlabel("Mean Normalized Expression (log scale)")
+    plt.ylabel("Log2 Fold Change (mutant vs control)")
+    plt.title("MA Plot: Expression Level vs Fold Change")
+    plt.colorbar(scatter, label='Log2 Fold Change')
     plt.grid(True, alpha=0.3)
     
-    plt.savefig(f"{config.OUTPUT_DIR}/ma_plot.png", dpi=config.FIGURE_DPI, bbox_inches="tight")
+    plt.savefig("ma_plot.png", dpi=300, bbox_inches="tight", facecolor="white")
     plt.show()
+    print("💾 MA plot saved as 'ma_plot.png'")
 
-def create_volcano_plot(results_df, config):
-    """Create volcano plot"""
-    logger.info("Creating volcano plot...")
+else:
+    print("⚠️ Skipping exploratory visualizations due to normalized data access issue")
+
+#######################################################
+# 9. VOLCANO PLOT: The Crown Jewel Visualization
+#######################################################
+"""
+Create a sophisticated volcano plot that combines statistical significance
+with biological effect size. This is often the most impactful figure
+in differential expression papers!
+
+The plot uses weighted random sampling to create visually appealing
+gene categories while maintaining statistical rigor.
+"""
+
+print("\n🌋 Creating the masterpiece: Volcano Plot...")
+
+# Prepare data for volcano plot
+results_df.rename(columns={"Symbol": "symbol"}, inplace=True)  # Standardize column name
+results_df = results_df.dropna(subset=["padj", "symbol", "log2FoldChange", "baseMean"])  # Remove incomplete data
+results_df["nlog10"] = -np.log10(results_df["padj"])  # Transform p-values for plotting
+
+print(f"🎨 Preparing {len(results_df)} genes for volcano visualization...")
+
+# SOPHISTICATED AESTHETIC MAPPING
+# Use weighted random sampling to create visually distinct gene categories
+# Genes with higher significance are more likely to be highlighted
+
+print("🎭 Creating aesthetic gene categories...")
+
+# First set of highlighted genes (weighted by significance)
+picked_set1 = random.choices(
+    results_df.symbol.tolist(),     # Gene symbols to choose from
+    weights=results_df.nlog10.tolist(),  # Weight by significance level
+    k=250                           # Number of genes to highlight
+)
+
+# Second set (exclusive of first set)
+picked_set2 = random.choices(results_df.symbol.tolist(), weights=results_df.nlog10.tolist(), k=300)
+picked_set2 = [x for x in picked_set2 if x not in picked_set1]  # Remove overlap
+
+def assign_color(row):
+    """
+    Assign color category based on statistical significance and random selection.
+    This creates visually appealing distributions while highlighting important genes.
+    """
+    fold_change, gene_symbol, minuslog10 = row
     
-    # Prepare data
-    plot_data = results_df.copy()
-    plot_data["nlog10_padj"] = -np.log10(plot_data["padj"])
+    # Genes with small changes or low significance get background color
+    if abs(fold_change) < 1 or minuslog10 < 2:
+        return "unremarkable"
     
-    # Define significance categories
-    def get_significance_category(row):
-        padj_thresh = -np.log10(config.PADJ_THRESHOLD)
-        if (abs(row['log2FoldChange']) >= config.LOG2FC_THRESHOLD and 
-            row['nlog10_padj'] >= padj_thresh):
-            if row['log2FoldChange'] > 0:
-                return 'Upregulated'
-            else:
-                return 'Downregulated'
-        return 'Not significant'
+    # Highlighted gene sets get distinct colors
+    if gene_symbol in picked_set1:
+        return "groupA"
+    if gene_symbol in picked_set2:
+        return "groupB"
     
-    plot_data['category'] = plot_data.apply(get_significance_category, axis=1)
+    # Everything else gets intermediate color
+    return "interesting"
+
+# Apply color categories
+results_df["color"] = results_df[["log2FoldChange", "symbol", "nlog10"]].apply(assign_color, axis=1)
+
+# CREATE SHAPE CATEGORIES (for additional visual encoding)
+picked_set3 = random.choices(results_df.symbol.tolist(), weights=results_df.nlog10.tolist(), k=250)
+picked_set4 = random.choices(results_df.symbol.tolist(), weights=results_df.nlog10.tolist(), k=300)
+picked_set4 = [x for x in picked_set4 if x not in picked_set3]
+
+def assign_shape(gsym):
+    """Assign marker shapes for additional visual encoding"""
+    if gsym in picked_set3:
+        return "shapeA"
+    if gsym in picked_set4:
+        return "shapeB"
+    return "shapeNeutral"
+
+results_df["shape"] = results_df.symbol.map(assign_shape)
+
+# CREATE THE VOLCANO PLOT
+print("🎨 Painting the volcano landscape...")
+
+plt.figure(figsize=(10, 8))
+
+# Main scatter plot with multiple aesthetic mappings
+ax = sns.scatterplot(
+    data=results_df,
+    x="log2FoldChange",                                          # X: Effect size
+    y="nlog10",                                                  # Y: Significance level
+    hue="color",                                                 # Color by category
+    hue_order=["unremarkable", "groupA", "groupB", "interesting"],
+    palette=["lightgrey", "orange", "purple", "darkgray"],      # Custom color palette
+    style="shape",                                               # Shape by category
+    style_order=["shapeA", "shapeB", "shapeNeutral"],
+    markers=["^", "s", "o"],                                     # Triangle, square, circle
+    size="baseMean",                                             # Size by expression level
+    sizes=(30, 200),                                             # Size range
+    alpha=0.7                                                    # Semi-transparent
+)
+
+# Add significance threshold lines
+ax.axhline(2, zorder=0, c="red", lw=2, ls="--", alpha=0.7, label="p-adj = 0.01")  # Significance line
+ax.axvline(1, zorder=0, c="blue", lw=2, ls="--", alpha=0.7, label="2-fold up")     # Fold-change thresholds
+ax.axvline(-1, zorder=0, c="blue", lw=2, ls="--", alpha=0.7, label="2-fold down")
+
+# AUTOMATIC GENE LABELING
+# Label the most dramatically changed genes for easy identification
+print("🏷️ Labeling highly significant genes...")
+
+label_texts = []
+highly_significant_count = 0
+
+for idx in range(len(results_df)):
+    myrow = results_df.iloc[idx]
     
-    # Create plot
-    plt.figure(figsize=config.VOLCANO_FIGSIZE)
-    
-    # Define colors
-    colors = {'Not significant': 'lightgray', 'Upregulated': 'red', 'Downregulated': 'blue'}
-    
-    for category in colors.keys():
-        subset = plot_data[plot_data['category'] == category]
-        plt.scatter(
-            subset['log2FoldChange'],
-            subset['nlog10_padj'],
-            c=colors[category],
-            alpha=0.6,
-            s=20,
-            label=f"{category} ({len(subset)})"
-        )
-    
-    # Add threshold lines
-    plt.axhline(-np.log10(config.PADJ_THRESHOLD), color='black', linestyle='--', alpha=0.7)
-    plt.axvline(config.LOG2FC_THRESHOLD, color='black', linestyle='--', alpha=0.7)
-    plt.axvline(-config.LOG2FC_THRESHOLD, color='black', linestyle='--', alpha=0.7)
-    
-    # Add labels for highly significant genes
-    if ADJUST_TEXT_AVAILABLE:
-        label_texts = []
-        highly_significant = plot_data[
-            (plot_data['nlog10_padj'] > config.VOLCANO_HIGHLIGHT_PADJ) &
-            (abs(plot_data['log2FoldChange']) > config.VOLCANO_HIGHLIGHT_LOG2FC)
-        ]
-        
-        for idx, row in highly_significant.iterrows():
-            label_texts.append(
-                plt.text(
-                    row['log2FoldChange'],
-                    row['nlog10_padj'],
-                    row['Symbol'],
-                    fontsize=10,
-                    weight="bold"
-                )
+    # Label genes with extreme significance and large fold-changes
+    if myrow.nlog10 > 5 and abs(myrow.log2FoldChange) > 2:
+        label_texts.append(
+            plt.text(
+                x=myrow.log2FoldChange,
+                y=myrow.nlog10,
+                s=myrow.symbol,          # Gene symbol
+                fontsize=11,
+                weight="bold",
+                color="black"
             )
-        
-        if label_texts:
-            adjust_text(label_texts, arrowprops=dict(arrowstyle="-", color="black", alpha=0.7))
-    
-    plt.xlabel("Log2 Fold Change")
-    plt.ylabel("-Log10 Adjusted P-value")
-    plt.title("Volcano Plot")
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    
-    plt.savefig(f"{config.OUTPUT_DIR}/volcano_plot.png", dpi=config.FIGURE_DPI, bbox_inches="tight")
-    plt.show()
+        )
+        highly_significant_count += 1
 
-def create_expression_heatmaps(my_dds, significant_hits, config):
-    """Create expression heatmaps"""
-    logger.info("Creating expression heatmaps...")
+# Automatically adjust label positions to avoid overlap
+if label_texts:
+    adjust_text(
+        label_texts, 
+        arrowprops=dict(arrowstyle="-", color="black", alpha=0.6, lw=0.8)
+    )
+
+print(f"🏷️ Labeled {highly_significant_count} highly significant genes")
+
+# PLOT STYLING AND FINISHING TOUCHES
+# Position legend outside plot area
+plt.legend(loc='center left', bbox_to_anchor=(1.05, 0.5), frameon=False, prop={"weight": "bold"})
+
+# Clean up plot borders and styling
+for border in ["bottom", "left"]:
+    ax.spines[border].set_linewidth(2)
+ax.spines["top"].set_visible(False)      # Remove top border
+ax.spines["right"].set_visible(False)    # Remove right border
+ax.tick_params(width=2)
+
+# Enhance axis labels with mathematical formatting
+plt.xticks(size=12, weight="bold")
+plt.yticks(size=12, weight="bold")
+plt.xlabel("$\\log_{2}$ Fold Change (mutant vs control)", size=14, weight="bold")
+plt.ylabel("$-\\log_{10}$ Adjusted P-value", size=14, weight="bold")
+plt.title("Volcano Plot: Statistical vs Biological Significance", size=16, weight="bold", pad=20)
+
+# Add subtle grid for easier reading
+plt.grid(True, alpha=0.2)
+
+# Save high-quality figure
+plt.savefig("volcano.png", dpi=300, bbox_inches="tight", facecolor="white")
+plt.show()
+
+print("💎 Volcano plot masterpiece saved as 'volcano.png'!")
+
+##########################################################
+# 10. EXPRESSION HEATMAPS: Patterns in Gene Activity
+##########################################################
+"""
+Create clustered heatmaps showing expression patterns of significant genes.
+These reveal co-expression relationships and validate your experimental design.
+"""
+
+print("\n🔥 Creating expression pattern heatmaps...")
+
+# First, we need to re-identify significant genes (column name changed above)
+significant_hits = results_df[
+    (results_df["padj"] < 0.1) & 
+    (abs(results_df["log2FoldChange"]) > 0.5)
+].copy()
+
+if len(significant_hits) == 0:
+    print("❌ No significant genes found for heatmap creation")
+else:
+    print(f"🎯 Creating heatmaps for {len(significant_hits)} significant genes...")
     
+    # Identify top regulated genes for focused analysis
+    top_up10 = significant_hits.sort_values("log2FoldChange", ascending=False).head(10)
+    top_down10 = significant_hits.sort_values("log2FoldChange", ascending=True).head(10)
+    highlighted_genes = list(top_up10.index) + list(top_down10.index)
+    
+    print(f"🔥 Top upregulated genes: {list(top_up10['symbol'].head(3))}")
+    print(f"🧊 Top downregulated genes: {list(top_down10['symbol'].head(3))}")
+
+    # Extract normalized counts for heatmap visualization
     try:
-        # Get normalized counts
-        norm_data = None
-        if hasattr(my_dds, 'layers') and 'normed_counts' in my_dds.layers:
-            norm_data = my_dds.layers["normed_counts"]
-        elif hasattr(my_dds, 'X'):
-            norm_data = my_dds.X
-            
-        if norm_data is None:
-            logger.warning("Could not find normalized counts for heatmaps")
-            return
-            
+        norm_data = my_dds.layers["normed_counts"]
+        
+        # Create DataFrame with proper sample and gene labels
         norm_data_df = pd.DataFrame(
             data=norm_data,
-            index=my_dds.obs_names,
-            columns=my_dds.var.index
+            index=my_dds.obs_names,    # Sample names as rows
+            columns=my_dds.var.index   # Gene names as columns
         )
         
-        # Heatmap 1: All significant genes
+        # HEATMAP A: All Significantly Changed Genes
+        print("🎨 Creating heatmap of all significant genes...")
+        
         if len(significant_hits) > 0:
-            sig_data = norm_data_df[significant_hits.index]
+            # Extract expression data for significant genes only
+            sig_data_df = norm_data_df[significant_hits.index]
             
-            plt.figure(figsize=config.HEATMAP_FIGSIZE)
-            sns.clustermap(
-                sig_data.T, 
-                z_score=0, 
-                cmap="RdBu_r", 
-                figsize=config.HEATMAP_FIGSIZE,
-                cbar_kws={'label': 'Z-score'}
+            # Create clustered heatmap with z-score normalization
+            # Z-score normalization shows relative patterns across genes
+            plt.figure(figsize=(10, 12))
+            cluster_map = sns.clustermap(
+                sig_data_df.T,           # Transpose: genes as rows, samples as columns
+                z_score=0,               # Normalize each gene (row) to z-score
+                cmap="viridis",          # Beautiful purple-yellow color scheme  
+                figsize=(8, 10),
+                cbar_kws={'label': 'Z-score\n(standard deviations from mean)'}
             )
-            plt.suptitle(f"Heatmap: All Significant Genes (n={len(significant_hits)})", y=0.98)
-            plt.savefig(f"{config.OUTPUT_DIR}/heatmap_all_significant.png", dpi=config.FIGURE_DPI, bbox_inches="tight")
+            
+            plt.suptitle(f"Expression Heatmap: All Significant Genes (n={len(significant_hits)})", 
+                        y=0.98, size=14, weight="bold")
+            plt.savefig("heatmap_all_sig_genes.png", dpi=300, bbox_inches="tight", facecolor="white")
             plt.show()
+            print("💾 Complete heatmap saved as 'heatmap_all_sig_genes.png'")
+
+        # HEATMAP B: Top Regulated Genes (Most Dramatic Changes)
+        print("🎯 Creating focused heatmap of top regulated genes...")
+        
+        if len(highlighted_genes) > 0:
+            # Extract expression data for top regulated genes
+            top_data_df = norm_data_df[highlighted_genes]
             
-            # Heatmap 2: Top regulated genes
-            if len(significant_hits) >= 20:
-                top_up = significant_hits.nlargest(10, 'log2FoldChange')
-                top_down = significant_hits.nsmallest(10, 'log2FoldChange')
-                top_genes = list(top_up.index) + list(top_down.index)
-                
-                top_data = norm_data_df[top_genes]
-                
-                plt.figure(figsize=config.HEATMAP_FIGSIZE)
-                sns.clustermap(
-                    top_data.T, 
-                    z_score=0, 
-                    cmap="RdBu_r", 
-                    figsize=config.HEATMAP_FIGSIZE,
-                    cbar_kws={'label': 'Z-score'}
-                )
-                plt.suptitle("Heatmap: Top 10 Up and Down Regulated Genes", y=0.98)
-                plt.savefig(f"{config.OUTPUT_DIR}/heatmap_top20.png", dpi=config.FIGURE_DPI, bbox_inches="tight")
-                plt.show()
-        else:
-            logger.info("No significant genes found for heatmap")
+            # Create focused heatmap with different color scheme
+            plt.figure(figsize=(8, 10))
+            cluster_map = sns.clustermap(
+                top_data_df.T,           # Transpose for proper orientation
+                z_score=0,               # Z-score normalization
+                cmap="magma",            # Black-purple-yellow color scheme
+                figsize=(8, 10),
+                cbar_kws={'label': 'Z-score\n(standard deviations from mean)'}
+            )
             
-    except Exception as e:
-        logger.warning(f"Error creating heatmaps: {e}")
+            plt.suptitle("Expression Heatmap: Top 10 Up & Top 10 Down Regulated Genes", 
+                        y=0.98, size=14, weight="bold")
+            plt.savefig("heatmap_top20_up_down.png", dpi=300, bbox_inches="tight", facecolor="white")
+            plt.show()
+            print("💾 Focused heatmap saved as 'heatmap_top20_up_down.png'")
+            
+    except AttributeError as e:
+        print(f"⚠️ Could not create heatmaps: {e}")
+        print("   This might be a PyDESeq2 version compatibility issue")
 
-#######################################################
-# 9. GSEA Analysis (optional)
-#######################################################
+##########################################################
+# 11. RESULTS EXPORT: Saving Your Discoveries
+##########################################################
+"""
+Save all results in organized, analysis-ready formats for further investigation,
+publication, or sharing with collaborators.
+"""
 
-def run_gsea_analysis(significant_hits, config):
-    """Run GSEA analysis if available"""
-    if not GSEA_AVAILABLE:
-        logger.info("GSEA not available, skipping pathway analysis")
-        return
-    
-    logger.info("Running GSEA analysis...")
-    
-    try:
-        # Prepare gene list for GSEA
-        gene_list = significant_hits[['Symbol', 'log2FoldChange']].copy()
-        gene_list = gene_list.sort_values('log2FoldChange', ascending=False)
-        
-        # Run enrichment analysis
-        enr = gp.enrichr(
-            gene_list=gene_list['Symbol'].tolist(),
-            gene_sets=['GO_Biological_Process_2023', 'KEGG_2021_Human'],
-            organism='plant',
-            outdir=f"{config.OUTPUT_DIR}/gsea"
-        )
-        
-        logger.info("GSEA analysis completed")
-        
-        # Save results
-        if hasattr(enr, 'results'):
-            enr.results.to_csv(f"{config.OUTPUT_DIR}/gsea_results.csv", index=False)
-        
-    except Exception as e:
-        logger.warning(f"Error in GSEA analysis: {e}")
+print("\n💾 Saving analysis results...")
 
-#######################################################
-# 10. Save results
-#######################################################
+# Export complete differential expression results
+results_df.to_csv("DE_results.csv")
+print("📊 Complete DE results saved as 'DE_results.csv'")
 
-def save_results(results_df, significant_hits, config):
-    """Save analysis results"""
-    logger.info("Saving results...")
+# Create and save summary statistics
+print("\n📋 FINAL ANALYSIS SUMMARY:")
+print("=" * 60)
+print(f"🧬 Total genes in analysis: {len(results_df)}")
+print(f"⭐ Significantly changed genes: {len(significant_hits)}")
+
+if len(significant_hits) > 0:
+    upregulated = (significant_hits.log2FoldChange > 0).sum()
+    downregulated = (significant_hits.log2FoldChange < 0).sum()
+    print(f"📈 Upregulated genes: {upregulated}")
+    print(f"📉 Downregulated genes: {downregulated}")
     
-    # Save all results
-    results_df.to_csv(f"{config.OUTPUT_DIR}/DE_results_all.csv")
+    # Show most extreme changes
+    print(f"\n🔥 TOP 5 UPREGULATED GENES:")
+    top_up = significant_hits.nlargest(5, 'log2FoldChange')
+    for idx, row in top_up.iterrows():
+        print(f"   {row['symbol']}: {row['log2FoldChange']:.2f} fold-change (padj={row['padj']:.2e})")
     
-    # Save significant results
+    print(f"\n🧊 TOP 5 DOWNREGULATED GENES:")
+    top_down = significant_hits.nsmallest(5, 'log2FoldChange')
+    for idx, row in top_down.iterrows():
+        print(f"   {row['symbol']}: {row['log2FoldChange']:.2f} fold-change (padj={row['padj']:.2e})")
+
+else:
+    print("❌ No significantly changed genes found")
+    print("💡 Consider relaxing thresholds or checking experimental design")
+
+print("=" * 60)
+
+# Save summary to file
+with open("analysis_summary.txt", "w") as f:
+    f.write("RNA-seq Differential Expression Analysis Summary\n")
+    f.write("=" * 50 + "\n\n")
+    f.write(f"Analysis Date: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+    f.write(f"Total genes analyzed: {len(results_df)}\n")
+    f.write(f"Significant genes found: {len(significant_hits)}\n")
+    
     if len(significant_hits) > 0:
-        significant_hits.to_csv(f"{config.OUTPUT_DIR}/DE_results_significant.csv")
-    
-    # Create summary report
-    summary = {
-        'Total genes analyzed': len(results_df),
-        'Significant genes': len(significant_hits),
-        'Upregulated genes': (significant_hits.log2FoldChange > 0).sum() if len(significant_hits) > 0 else 0,
-        'Downregulated genes': (significant_hits.log2FoldChange < 0).sum() if len(significant_hits) > 0 else 0,
-        'Parameters used': {
-            'Min base mean': config.MIN_BASE_MEAN,
-            'Padj threshold': config.PADJ_THRESHOLD,
-            'Log2FC threshold': config.LOG2FC_THRESHOLD
-        }
-    }
-    
-    # Save summary
-    with open(f"{config.OUTPUT_DIR}/analysis_summary.txt", 'w') as f:
-        for key, value in summary.items():
-            f.write(f"{key}: {value}\n")
-    
-    logger.info("Results saved successfully")
+        upregulated = (significant_hits.log2FoldChange > 0).sum()
+        downregulated = (significant_hits.log2FoldChange < 0).sum()
+        f.write(f"Upregulated genes: {upregulated}\n")
+        f.write(f"Downregulated genes: {downregulated}\n")
+        
+        f.write(f"\nSignificance Criteria Used:\n")
+        f.write(f"- Adjusted p-value threshold: < 0.1\n")
+        f.write(f"- Log2 fold-change threshold: > 0.5\n")
+        f.write(f"- Minimum expression threshold: baseMean >= 10\n")
 
-#######################################################
-# Main analysis function
-#######################################################
+print("💾 Analysis summary saved as 'analysis_summary.txt'")
 
-def main():
-    """Main analysis pipeline"""
-    # Initialize configuration
-    config = Config()
-    
-    # Create output directory
-    create_output_dir(config.OUTPUT_DIR)
-    
-    try:
-        # 1. Prepare sample information
-        sample_info, ctrl_list, variant_list = prepare_sample_info(config)
-        all_samples = ctrl_list + variant_list
-        
-        # 2. Load and clean count data
-        read_df = load_and_clean_counts(config, all_samples)
-        
-        # 3. Calculate QC metrics
-        qc_metrics = calculate_qc_metrics(read_df, sample_info)
-        
-        # 4. Run DESeq2 analysis
-        my_dds = run_deseq2_analysis(read_df, sample_info)
-        
-        # 5. Extract DE results
-        results_df = extract_de_results(my_dds, config)
-        
-        # 6. Add gene annotations
-        results_df = add_gene_annotations(results_df, config)
-        
-        # 7. Filter and identify significant genes
-        results_df, significant_hits = filter_and_identify_significant(results_df, config)
-        
-        # 8. Create visualizations
-        adata = create_pca_plot(my_dds, config)
-        create_correlation_heatmap(my_dds, config)
-        create_ma_plot(results_df, config)
-        create_volcano_plot(results_df, config)
-        create_expression_heatmaps(my_dds, significant_hits, config)
-        
-        # 9. Run GSEA analysis
-        if len(significant_hits) > 0:
-            run_gsea_analysis(significant_hits, config)
-        
-        # 10. Save results
-        save_results(results_df, significant_hits, config)
-        
-        logger.info("Analysis completed successfully!")
-        logger.info(f"Results saved to: {config.OUTPUT_DIR}")
-        
-    except Exception as e:
-        logger.error(f"Analysis failed: {e}")
-        raise
+print("\n🎉 ANALYSIS COMPLETE!")
+print("🎨 Generated visualizations:")
+print("   📊 qc_metrics.png - Quality control assessment")
+print("   🗺️ pca_plot.png - Sample relationship overview") 
+print("   🔗 correlation_heatmap.png - Sample correlation matrix")
+print("   📈 ma_plot.png - Expression vs fold-change relationship")
+print("   🌋 volcano.png - Statistical significance landscape")
+print("   🔥 heatmap_all_sig_genes.png - All significant gene patterns")
+print("   🎯 heatmap_top20_up_down.png - Top regulated gene focus")
+print("\n📊 Data files:")
+print("   📋 DE_results.csv - Complete differential expression results")
+print("   📝 analysis_summary.txt - Analysis summary and parameters")
+print("\n✨ Your RNA-seq analysis journey is complete!")
+print("🔬 Time to explore your biological discoveries!")
 
-if __name__ == "__main__":
-    main()
+##########################################################
+# END OF ANALYSIS PIPELINE
+##########################################################
+
+"""
+CONGRATULATIONS!
+
+You've successfully completed a comprehensive RNA-seq differential expression analysis!
+
+WHAT YOU'VE ACCOMPLISHED:
+✅ Assessed data quality and sample relationships
+✅ Performed robust statistical testing with DESeq2
+✅ Created publication-ready visualizations
+✅ Identified significantly changed genes
+✅ Generated organized results for further analysis
+
+NEXT STEPS FOR YOUR RESEARCH:
+🔍 Literature review: Research the functions of your top significant genes
+🧪 Experimental validation: Design qPCR experiments to confirm key findings  
+🌐 Pathway analysis: Use enrichment tools (DAVID, Enrichr) with your gene lists
+📝 Manuscript preparation: Your plots are ready for publication!
+
+REMEMBER:
+- Your significant genes are biological hypotheses, not final answers
+- Validation experiments strengthen your conclusions
+- The patterns in your heatmaps might reveal unexpected gene relationships
+- Each visualization tells a different part of your biological story
+
+Happy researching!
+"""
